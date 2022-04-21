@@ -22,14 +22,13 @@ from ikomia.core.task import TaskParam
 from ikomia.dnn import datasetio, dnntrain
 import os
 import distutils
-from train_mmlab_kie.utils import kie_models, UserStop
+from train_mmlab_kie.utils import UserStop
 
 # Your imports below
 from pathlib import Path
 from datetime import datetime
 from mmcv import Config
 from train_mmlab_kie.utils import prepare_dataset
-from multiprocessing import cpu_count
 import mmcv
 import torch
 from mmcv.runner import get_dist_info, init_dist, set_random_seed
@@ -49,26 +48,31 @@ class TrainMmlabKieParam(TaskParam):
 
     def __init__(self):
         TaskParam.__init__(self)
-        self.cfg["model_name"] = "SDMGR"
-        self.cfg["epochs"] = 5
+        self.cfg["model_name"] = "sdmgr"
+        self.cfg["cfg"] = "sdmgr_novisual_60e_wildreceipt.py"
+        self.cfg["weights"] = "https://download.openmmlab.com/mmocr/kie/sdmgr/" \
+                              "sdmgr_novisual_60e_wildreceipt_20210405-07bc26ad.pth"
+        self.cfg["custom_cfg"] = ""
+        self.cfg["pretrain"] = True
+        self.cfg["epochs"] = 10
         self.cfg["batch_size"] = 32
         self.cfg["dataset_split_ratio"] = 90
         self.cfg["output_folder"] = os.path.dirname(os.path.realpath(__file__)) + "/runs/"
-        self.cfg["custom_model"] = ""
         self.cfg["eval_period"] = 1
-        self.cfg["pretrain"] = ""
-        self.cfg["dataset_folder"] = os.path.dirname(os.path.realpath(__file__)) + "/dataset"
+        self.cfg["dataset_folder"] = os.path.dirname(os.path.realpath(__file__))
         self.cfg["expert_mode"] = False
 
     def setParamMap(self, param_map):
         self.cfg["model_name"] = param_map["model_name"]
+        self.cfg["cfg"] = param_map["cfg"]
+        self.cfg["custom_cfg"] = param_map["custom_cfg"]
+        self.cfg["weights"] = param_map["weights"]
+        self.cfg["pretrain"] = distutils.util.strtobool(param_map["pretrain"])
         self.cfg["epochs"] = int(param_map["epochs"])
         self.cfg["batch_size"] = int(param_map["batch_size"])
         self.cfg["dataset_split_ratio"] = int(param_map["dataset_split_ratio"])
         self.cfg["output_folder"] = param_map["output_folder"]
-        self.cfg["custom_model"] = param_map["custom_model"]
         self.cfg["eval_period"] = int(param_map["eval_period"])
-        self.cfg["pretrain"] = param_map["pretrain"]
         self.cfg["dataset_folder"] = param_map["dataset_folder"]
         self.cfg["expert_mode"] = distutils.util.strtobool(param_map["expert_mode"])
 
@@ -128,9 +132,9 @@ class TrainMmlabKie(dnntrain.TrainProcess):
         prepare_dataset(input.data, param.cfg["dataset_split_ratio"] / 100, param.cfg["dataset_folder"])
 
         # Create config from config file and parameters
-        if not (param.cfg["expert_mode"]):
-            config = str(Path(os.path.dirname(os.path.realpath(__file__))) / "configs/kie" \
-                         / kie_models[param.cfg["model_name"]]['config'])
+        if not param.cfg["expert_mode"]:
+            config = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs", "kie",
+                                  param.cfg["model_name"], param.cfg["cfg"])
             cfg = Config.fromfile(config)
             seed = None
             cfg.work_dir = str(self.output_folder)
@@ -140,7 +144,7 @@ class TrainMmlabKie(dnntrain.TrainProcess):
             cfg.total_epochs = param.cfg["epochs"]
             eval_period = param.cfg["eval_period"]
             cfg.data.samples_per_gpu = param.cfg["batch_size"]
-            cfg.data.workers_per_gpu = cpu_count() // 2
+            cfg.data.workers_per_gpu = 0
             cfg.train.ann_file = f'{param.cfg["dataset_folder"]}/train.txt'
             cfg.train.dict_file = input.data['metadata']["dict_file"]
             cfg.train.img_prefix = ''
@@ -169,14 +173,14 @@ class TrainMmlabKie(dnntrain.TrainProcess):
                     dict(type='TextLoggerHook'),
                     dict(type='TensorboardLoggerHook', log_dir=tb_logdir)
                 ])
-            cfg.checkpoint_config.interval = 10
+            cfg.checkpoint_config = None
+            cfg.load_from = param.cfg["weights"] if param.cfg["pretrain"] else None
+
         else:
             config = param.cfg["custom_model"]
             cfg = Config.fromfile(config)
 
         no_validate = cfg.evaluation.interval <= 0
-
-        cfg.load_from = param.cfg["pretrain"] if param.cfg["pretrain"] != "" else None
 
         # import modules from string list.
         if cfg.get('custom_imports', None):
@@ -237,19 +241,7 @@ class TrainMmlabKie(dnntrain.TrainProcess):
         model.init_weights()
 
         datasets = [build_dataset(cfg.data.train)]
-        if len(cfg.workflow) == 2:
-            val_dataset = copy.deepcopy(cfg.data.val)
-            if cfg.data.train['type'] == 'ConcatDataset':
-                train_pipeline = cfg.data.train['datasets'][0].pipeline
-            else:
-                train_pipeline = cfg.data.train.pipeline
 
-            if val_dataset['type'] == 'ConcatDataset':
-                for dataset in val_dataset['datasets']:
-                    dataset.pipeline = train_pipeline
-            else:
-                val_dataset.pipeline = train_pipeline
-            datasets.append(build_dataset(val_dataset))
         if cfg.checkpoint_config is not None:
             # save mmdet version, config file content and class names in
             # checkpoints as meta data
@@ -262,7 +254,8 @@ class TrainMmlabKie(dnntrain.TrainProcess):
         # add here custom hook to stop process when user clicks stop button
         cfg.custom_hooks = [
             dict(type='CustomHook', stop=self.get_stop, output_folder=str(self.output_folder),
-                 emitStepProgress=self.emitStepProgress, priority='LOWEST')
+                 emitStepProgress=self.emitStepProgress, priority='LOWEST'),
+            dict(type='CustomMlflowLoggerHook', log_metrics=self.log_metrics)
         ]
 
         print("Starting training...")
@@ -272,7 +265,7 @@ class TrainMmlabKie(dnntrain.TrainProcess):
                 datasets,
                 cfg,
                 distributed=distributed,
-                validate=(not no_validate),
+                validate=not no_validate,
                 timestamp=timestamp,
                 meta=meta)
         except UserStop:
