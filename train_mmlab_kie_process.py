@@ -59,7 +59,7 @@ class TrainMmlabKieParam(TaskParam):
         self.cfg["dataset_split_ratio"] = 90
         self.cfg["output_folder"] = os.path.dirname(os.path.realpath(__file__)) + "/runs/"
         self.cfg["eval_period"] = 1
-        self.cfg["dataset_folder"] = os.path.dirname(os.path.realpath(__file__))
+        self.cfg["dataset_folder"] = os.path.dirname(os.path.realpath(__file__)) + "/dataset"
         self.cfg["expert_mode"] = False
 
     def setParamMap(self, param_map):
@@ -129,7 +129,7 @@ class TrainMmlabKie(dnntrain.TrainProcess):
         tb_logdir = str(Path(self.getTensorboardLogDir()) / str_datetime)
 
         # Transform Ikomia dataset to ICDAR compatible dataset if needed
-        prepare_dataset(input.data, param.cfg["dataset_split_ratio"] / 100, param.cfg["dataset_folder"])
+        openset = prepare_dataset(input.data, param.cfg["dataset_split_ratio"] / 100, param.cfg["dataset_folder"])
 
         # Create config from config file and parameters
         if not param.cfg["expert_mode"]:
@@ -157,14 +157,40 @@ class TrainMmlabKie(dnntrain.TrainProcess):
             cfg.data.test = cfg.test
             cfg.data.val = cfg.test
 
-            cfg.evaluation = dict(
-                interval=eval_period,
-                metric='macro_f1',
-                metric_options=dict(
-                    macro_f1=dict(
-                        ignores=input.data['metadata']['eval_ignore'])),
-                save_best='auto',
-                rule='greater')
+            cfg.dataset_type = 'MyKIEDataset'
+            cfg.train.type = 'MyKIEDataset'
+            cfg.test.type = 'MyKIEDataset'
+
+            cfg.model.bbox_head['num_classes'] = len(input.data["metadata"]["category_names"])
+            with open(input.data['metadata']["dict_file"], 'r') as f:
+                num_chars = len(f.readlines())
+            cfg.model.bbox_head['num_chars'] = num_chars
+
+            print("OPENSET : " + str(openset))
+            if openset:
+                cfg.evaluation = dict(
+                    interval=eval_period,
+                    metric='openset_f1',
+                    metric_options=dict(
+                        openset_f1=dict(
+                            ignores=input.data['metadata']['eval_ignore'])),
+                    save_best='auto',
+                    rule='greater')
+                cfg.dataset_type = 'MyOpensetKIEDataset'
+                cfg.train.type = 'MyOpensetKIEDataset'
+                cfg.test.type = 'MyOpensetKIEDataset'
+                cfg.train.node_classes = len(input.data["metadata"]["category_names"])
+                cfg.test.node_classes = len(input.data["metadata"]["category_names"])
+
+            else:
+                cfg.evaluation = dict(
+                    interval=eval_period,
+                    metric='macro_f1',
+                    metric_options=dict(
+                        macro_f1=dict(
+                            ignores=input.data['metadata']['eval_ignore'])),
+                    save_best='auto',
+                    rule='greater')
 
             cfg.log_config = dict(
                 interval=5,
@@ -180,7 +206,7 @@ class TrainMmlabKie(dnntrain.TrainProcess):
             config = param.cfg["custom_model"]
             cfg = Config.fromfile(config)
 
-        no_validate = cfg.evaluation.interval <= 0
+        no_validate = cfg.evaluation.interval <= 0 or param.cfg["dataset_split_ratio"] == 100
 
         # import modules from string list.
         if cfg.get('custom_imports', None):
