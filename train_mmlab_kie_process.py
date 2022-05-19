@@ -22,6 +22,7 @@ from ikomia.core.task import TaskParam
 from ikomia.dnn import datasetio, dnntrain
 import os
 import distutils
+from ikomia.core import config as ikcfg
 from train_mmlab_kie.utils import UserStop
 
 # Your imports below
@@ -126,7 +127,7 @@ class TrainMmlabKie(dnntrain.TrainProcess):
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
         # Tensorboard
-        tb_logdir = str(Path(self.getTensorboardLogDir()) / str_datetime)
+        tb_logdir = os.path.join(ikcfg.main_cfg["tensorboard"]["log_uri"], str_datetime)
 
         # Transform Ikomia dataset to ICDAR compatible dataset if needed
         openset = prepare_dataset(input.data, param.cfg["dataset_split_ratio"] / 100, param.cfg["dataset_folder"])
