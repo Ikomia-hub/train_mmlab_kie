@@ -29,7 +29,7 @@ from train_mmlab_kie.utils import UserStop
 from pathlib import Path
 from datetime import datetime
 from mmcv import Config
-from train_mmlab_kie.utils import prepare_dataset
+from train_mmlab_kie.utils import prepare_dataset, register_mmlab_modules
 import mmcv
 import torch
 from mmcv.runner import get_dist_info, init_dist, set_random_seed
@@ -86,7 +86,8 @@ class TrainMmlabKie(dnntrain.TrainProcess):
 
     def __init__(self, name, param):
         dnntrain.TrainProcess.__init__(self, name, param)
-        # Add input/output of the process here
+
+        register_mmlab_modules()
 
         # Variable to check if the training must be stopped by user
         self.stop_train = False

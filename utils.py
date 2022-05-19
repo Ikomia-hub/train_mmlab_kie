@@ -18,93 +18,150 @@ class UserStop(Exception):
     pass
 
 
-# Define custom hook to stop process when user uses stop button and to save last checkpoint
+def register_mmlab_modules():
+    # Define custom hook to stop process when user uses stop button and to save last checkpoint
 
-@HOOKS.register_module(force=True)
-class CustomHook(Hook):
-    # Check at each iter if the training must be stopped
-    def __init__(self, stop, output_folder, emitStepProgress):
-        self.stop = stop
-        self.output_folder = output_folder
-        self.emitStepProgress = emitStepProgress
+    @HOOKS.register_module(force=True)
+    class CustomHook(Hook):
+        # Check at each iter if the training must be stopped
+        def __init__(self, stop, output_folder, emitStepProgress):
+            self.stop = stop
+            self.output_folder = output_folder
+            self.emitStepProgress = emitStepProgress
 
-    def after_epoch(self, runner):
-        self.emitStepProgress()
+        def after_epoch(self, runner):
+            self.emitStepProgress()
 
-    def after_train_iter(self, runner):
-        # Check if training must be stopped and save last model
-        if self.stop():
-            runner.save_checkpoint(self.output_folder, "latest.pth", create_symlink=False)
-            raise UserStop
+        def after_train_iter(self, runner):
+            # Check if training must be stopped and save last model
+            if self.stop():
+                runner.save_checkpoint(self.output_folder, "latest.pth", create_symlink=False)
+                raise UserStop
 
+    @HOOKS.register_module(force=True)
+    class CustomMlflowLoggerHook(LoggerHook):
+        """Class to log metrics and (optionally) a trained model to MLflow.
+        It requires `MLflow`_ to be installed.
+        Args:
+            interval (int): Logging interval (every k iterations). Default: 10.
+            ignore_last (bool): Ignore the log of last iterations in each epoch
+                if less than `interval`. Default: True.
+            reset_flag (bool): Whether to clear the output buffer after logging.
+                Default: False.
+            by_epoch (bool): Whether EpochBasedRunner is used. Default: True.
+        .. _MLflow:
+            https://www.mlflow.org/docs/latest/index.html
+        """
 
-@HOOKS.register_module(force=True)
-class CustomMlflowLoggerHook(LoggerHook):
-    """Class to log metrics and (optionally) a trained model to MLflow.
-    It requires `MLflow`_ to be installed.
-    Args:
-        interval (int): Logging interval (every k iterations). Default: 10.
-        ignore_last (bool): Ignore the log of last iterations in each epoch
-            if less than `interval`. Default: True.
-        reset_flag (bool): Whether to clear the output buffer after logging.
-            Default: False.
-        by_epoch (bool): Whether EpochBasedRunner is used. Default: True.
-    .. _MLflow:
-        https://www.mlflow.org/docs/latest/index.html
-    """
+        def __init__(self,
+                     log_metrics,
+                     interval=10,
+                     ignore_last=True,
+                     reset_flag=False,
+                     by_epoch=False):
+            super(CustomMlflowLoggerHook, self).__init__(interval, ignore_last,
+                                                         reset_flag, by_epoch)
+            self.log_metrics = log_metrics
 
-    def __init__(self,
-                 log_metrics,
-                 interval=10,
-                 ignore_last=True,
-                 reset_flag=False,
-                 by_epoch=False):
-        super(CustomMlflowLoggerHook, self).__init__(interval, ignore_last,
-                                                     reset_flag, by_epoch)
-        self.log_metrics = log_metrics
+        @master_only
+        def log(self, runner):
+            tags = self.get_loggable_tags(runner)
+            if tags:
+                self.log_metrics(tags, step=self.get_iter(runner))
 
-    @master_only
-    def log(self, runner):
-        tags = self.get_loggable_tags(runner)
-        if tags:
-            self.log_metrics(tags, step=self.get_iter(runner))
+    @DATASETS.register_module(force=True)
+    class MyOpensetKIEDataset(OpensetKIEDataset):
+        key_node_idx = 1
 
+        def __init__(self,
+                     ann_file,
+                     loader,
+                     dict_file,
+                     img_prefix='',
+                     pipeline=None,
+                     norm=10.,
+                     link_type='one-to-one',
+                     edge_thr=0.5,
+                     test_mode=True,
+                     key_node_idx=0,
+                     value_node_idx=1,
+                     node_classes=4):
+            super().__init__(ann_file, loader, dict_file, img_prefix, pipeline,
+                             norm, link_type, edge_thr, test_mode, key_node_idx, value_node_idx, node_classes)
+            with open(dict_file, 'r') as f:
+                lines = f.readlines()
 
-@DATASETS.register_module(force=True)
-class MyOpensetKIEDataset(OpensetKIEDataset):
-    key_node_idx = 1
-
-    def __init__(self,
-                 ann_file,
-                 loader,
-                 dict_file,
-                 img_prefix='',
-                 pipeline=None,
-                 norm=10.,
-                 link_type='one-to-one',
-                 edge_thr=0.5,
-                 test_mode=True,
-                 key_node_idx=0,
-                 value_node_idx=1,
-                 node_classes=4):
-        super().__init__(ann_file, loader, dict_file, img_prefix, pipeline,
-                         norm, link_type, edge_thr, test_mode, key_node_idx, value_node_idx, node_classes)
-        with open(dict_file, 'r') as f:
-            lines = f.readlines()
-
-        dict_list = ""
-        for line in lines:
-            char = line.rstrip("\n")
-            if char == "":
-                char = " "
-            dict_list += char
-        self.dict = {
-            '': 0,
-            **{
-                line.rstrip('\r\n'): ind
-                for ind, line in enumerate(dict_list, 1)
+            dict_list = ""
+            for line in lines:
+                char = line.rstrip("\n")
+                if char == "":
+                    char = " "
+                dict_list += char
+            self.dict = {
+                '': 0,
+                **{
+                    line.rstrip('\r\n'): ind
+                    for ind, line in enumerate(dict_list, 1)
+                }
             }
-        }
+
+    @DATASETS.register_module(force=True)
+    class MyKIEDataset(KIEDataset):
+        """
+        Args:
+            ann_file (str): Annotation file path.
+            pipeline (list[dict]): Processing pipeline.
+            loader (dict): Dictionary to construct loader
+                to load annotation infos.
+            img_prefix (str, optional): Image prefix to generate full
+                image path.
+            test_mode (bool, optional): If True, try...except will
+                be turned off in __getitem__.
+            dict_file (str): Character dict file path.
+            norm (float): Norm to map value from one range to another.
+        """
+
+        def __init__(self,
+                     ann_file=None,
+                     loader=None,
+                     dict_file=None,
+                     img_prefix='',
+                     pipeline=None,
+                     norm=10.,
+                     directed=False,
+                     test_mode=True,
+                     **kwargs):
+            if ann_file is None and loader is None:
+                warnings.warn(
+                    'KIEDataset is only initialized as a downstream demo task '
+                    'of text detection and recognition '
+                    'without an annotation file.', UserWarning)
+            else:
+                super().__init__(
+                    ann_file=ann_file,
+                    loader=loader,
+                    pipeline=pipeline,
+                    dict_file=dict_file,
+                    img_prefix=img_prefix,
+                    test_mode=test_mode)
+                assert osp.exists(dict_file)
+
+            with open(dict_file, 'r') as f:
+                lines = f.readlines()
+
+            dict_list = ""
+            for line in lines:
+                char = line.rstrip("\n")
+                if char == "":
+                    char = " "
+                dict_list += char
+            self.dict = {
+                '': 0,
+                **{
+                    line.rstrip('\r\n'): ind
+                    for ind, line in enumerate(dict_list, 1)
+                }
+            }
 
 
 def prepare_dataset(ikdataset, split, output_dataset):
@@ -172,62 +229,3 @@ def prepare_dataset(ikdataset, split, output_dataset):
                     return False
         return False
     raise Exception
-
-
-@DATASETS.register_module(force=True)
-class MyKIEDataset(KIEDataset):
-    """
-    Args:
-        ann_file (str): Annotation file path.
-        pipeline (list[dict]): Processing pipeline.
-        loader (dict): Dictionary to construct loader
-            to load annotation infos.
-        img_prefix (str, optional): Image prefix to generate full
-            image path.
-        test_mode (bool, optional): If True, try...except will
-            be turned off in __getitem__.
-        dict_file (str): Character dict file path.
-        norm (float): Norm to map value from one range to another.
-    """
-
-    def __init__(self,
-                 ann_file=None,
-                 loader=None,
-                 dict_file=None,
-                 img_prefix='',
-                 pipeline=None,
-                 norm=10.,
-                 directed=False,
-                 test_mode=True,
-                 **kwargs):
-        if ann_file is None and loader is None:
-            warnings.warn(
-                'KIEDataset is only initialized as a downstream demo task '
-                'of text detection and recognition '
-                'without an annotation file.', UserWarning)
-        else:
-            super().__init__(
-                ann_file=ann_file,
-                loader=loader,
-                pipeline=pipeline,
-                dict_file=dict_file,
-                img_prefix=img_prefix,
-                test_mode=test_mode)
-            assert osp.exists(dict_file)
-
-        with open(dict_file, 'r') as f:
-            lines = f.readlines()
-
-        dict_list = ""
-        for line in lines:
-            char = line.rstrip("\n")
-            if char == "":
-                char = " "
-            dict_list += char
-        self.dict = {
-            '': 0,
-            **{
-                line.rstrip('\r\n'): ind
-                for ind, line in enumerate(dict_list, 1)
-            }
-        }
