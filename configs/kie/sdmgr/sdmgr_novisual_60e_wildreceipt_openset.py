@@ -37,7 +37,7 @@ test_pipeline = [
     dict(
         type='Collect',
         keys=['img', 'relations', 'texts', 'gt_bboxes'],
-        meta_keys=('filename', 'ori_filename', 'ori_texts', 'ori_bboxes',
+        meta_keys=('filename', 'ori_filename', 'ori_texts', 'ori_boxes',
                    'img_norm_cfg', 'ori_filename', 'img_shape'))
 ]
 
