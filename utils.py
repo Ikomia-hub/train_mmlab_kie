@@ -2,16 +2,13 @@ import os.path
 import random
 import numpy as np
 import json
-from mmcv.runner.hooks import HOOKS, Hook
-from mmcv.runner.hooks import LoggerHook
-from mmcv.runner.dist_utils import master_only
-from mmocr.datasets.openset_kie_dataset import OpensetKIEDataset
-import torch
-from mmdet.datasets.builder import DATASETS
-from mmocr.datasets.base_dataset import BaseDataset
-from mmocr.datasets.kie_dataset import KIEDataset
-import os.path as osp
-import warnings
+from mmengine.registry import HOOKS
+from mmengine.hooks import Hook
+from mmengine.hooks import LoggerHook
+from mmengine.dist import master_only
+from typing import Optional, Sequence, Union, Dict
+
+DATA_BATCH = Optional[Union[dict, tuple, list]]
 
 
 class UserStop(Exception):
@@ -20,7 +17,6 @@ class UserStop(Exception):
 
 def register_mmlab_modules():
     # Define custom hook to stop process when user uses stop button and to save last checkpoint
-
     @HOOKS.register_module(force=True)
     class CustomHook(Hook):
         # Check at each iter if the training must be stopped
@@ -32,7 +28,12 @@ def register_mmlab_modules():
         def after_epoch(self, runner):
             self.emitStepProgress()
 
-        def after_train_iter(self, runner):
+        def _after_iter(self,
+                        runner,
+                        batch_idx: int,
+                        data_batch: DATA_BATCH = None,
+                        outputs: Optional[Union[Sequence, dict]] = None,
+                        mode: str = 'train') -> None:
             # Check if training must be stopped and save last model
             if self.stop():
                 runner.save_checkpoint(self.output_folder, "latest.pth", create_symlink=False)
@@ -43,11 +44,10 @@ def register_mmlab_modules():
         """Class to log metrics and (optionally) a trained model to MLflow.
         It requires `MLflow`_ to be installed.
         Args:
+            log_metrics (function): Logging function.
             interval (int): Logging interval (every k iterations). Default: 10.
             ignore_last (bool): Ignore the log of last iterations in each epoch
                 if less than `interval`. Default: True.
-            reset_flag (bool): Whether to clear the output buffer after logging.
-                Default: False.
             by_epoch (bool): Whether EpochBasedRunner is used. Default: True.
         .. _MLflow:
             https://www.mlflow.org/docs/latest/index.html
@@ -57,111 +57,64 @@ def register_mmlab_modules():
                      log_metrics,
                      interval=10,
                      ignore_last=True,
-                     reset_flag=False,
                      by_epoch=False):
-            super(CustomMlflowLoggerHook, self).__init__(interval, ignore_last,
-                                                         reset_flag, by_epoch)
+            super(CustomMlflowLoggerHook, self).__init__(interval=interval, ignore_last=ignore_last,
+                                                         log_metric_by_epoch=by_epoch)
             self.log_metrics = log_metrics
 
-        @master_only
-        def log(self, runner):
-            tags = self.get_loggable_tags(runner)
-            if tags:
-                self.log_metrics(tags, step=self.get_iter(runner))
+        def after_val_epoch(self,
+                            runner,
+                            metrics: Optional[Dict[str, float]] = None) -> None:
+            """All subclasses should override this method, if they need any
+            operations after each validation epoch.
 
-    @DATASETS.register_module(force=True)
-    class MyOpensetKIEDataset(OpensetKIEDataset):
-        key_node_idx = 1
+            Args:
+                runner (Runner): The runner of the validation process.
+                metrics (Dict[str, float], optional): Evaluation results of all
+                    metrics on validation dataset. The keys are the names of the
+                    metrics, and the values are corresponding results.
+            """
+            tag, log_str = runner.log_processor.get_log_after_epoch(
+                runner, len(runner.val_dataloader), 'val')
+            runner.logger.info(log_str)
+            self.log_metrics(tag, step=runner.iter)
 
-        def __init__(self,
-                     ann_file,
-                     loader,
-                     dict_file,
-                     img_prefix='',
-                     pipeline=None,
-                     norm=10.,
-                     link_type='one-to-one',
-                     edge_thr=0.5,
-                     test_mode=True,
-                     key_node_idx=0,
-                     value_node_idx=1,
-                     node_classes=4):
-            super().__init__(ann_file, loader, dict_file, img_prefix, pipeline,
-                             norm, link_type, edge_thr, test_mode, key_node_idx, value_node_idx, node_classes)
-            with open(dict_file, 'r') as f:
-                lines = f.readlines()
+        def after_train_iter(self,
+                             runner,
+                             batch_idx: int,
+                             data_batch: DATA_BATCH = None,
+                             outputs: Optional[dict] = None) -> None:
+            """Record logs after training iteration.
 
-            dict_list = ""
-            for line in lines:
-                char = line.rstrip("\n")
-                if char == "":
-                    char = " "
-                dict_list += char
-            self.dict = {
-                '': 0,
-                **{
-                    line.rstrip('\r\n'): ind
-                    for ind, line in enumerate(dict_list, 1)
-                }
-            }
-
-    @DATASETS.register_module(force=True)
-    class MyKIEDataset(KIEDataset):
-        """
-        Args:
-            ann_file (str): Annotation file path.
-            pipeline (list[dict]): Processing pipeline.
-            loader (dict): Dictionary to construct loader
-                to load annotation infos.
-            img_prefix (str, optional): Image prefix to generate full
-                image path.
-            test_mode (bool, optional): If True, try...except will
-                be turned off in __getitem__.
-            dict_file (str): Character dict file path.
-            norm (float): Norm to map value from one range to another.
-        """
-
-        def __init__(self,
-                     ann_file=None,
-                     loader=None,
-                     dict_file=None,
-                     img_prefix='',
-                     pipeline=None,
-                     norm=10.,
-                     directed=False,
-                     test_mode=True,
-                     **kwargs):
-            if ann_file is None and loader is None:
-                warnings.warn(
-                    'KIEDataset is only initialized as a downstream demo task '
-                    'of text detection and recognition '
-                    'without an annotation file.', UserWarning)
+            Args:
+                runner (Runner): The runner of the training process.
+                batch_idx (int): The index of the current batch in the train loop.
+                data_batch (dict tuple or list, optional): Data from dataloader.
+                outputs (dict, optional): Outputs from model.
+            """
+            # Print experiment name every n iterations.
+            if self.every_n_train_iters(
+                    runner, self.interval_exp_name) or (self.end_of_epoch(
+                runner.train_dataloader, batch_idx)):
+                exp_info = f'Exp name: {runner.experiment_name}'
+                runner.logger.info(exp_info)
+            if self.every_n_inner_iters(batch_idx, self.interval):
+                tag, log_str = runner.log_processor.get_log_after_iter(
+                    runner, batch_idx, 'train')
+            elif (self.end_of_epoch(runner.train_dataloader, batch_idx)
+                  and not self.ignore_last):
+                # `runner.max_iters` may not be divisible by `self.interval`. if
+                # `self.ignore_last==True`, the log of remaining iterations will
+                # be recorded (Epoch [4][1000/1007], the logs of 998-1007
+                # iterations will be recorded).
+                tag, log_str = runner.log_processor.get_log_after_iter(
+                    runner, batch_idx, 'train')
             else:
-                super().__init__(
-                    ann_file=ann_file,
-                    loader=loader,
-                    pipeline=pipeline,
-                    dict_file=dict_file,
-                    img_prefix=img_prefix,
-                    test_mode=test_mode)
-                assert osp.exists(dict_file)
-
-            with open(dict_file, 'r') as f:
-                lines = f.readlines()
-
-            dict_list = ""
-            for line in lines:
-                char = line.rstrip("\n")
-                if char == "":
-                    char = " "
-                dict_list += char
-            self.dict = {
-                '': 0,
-                **{
-                    line.rstrip('\r\n'): ind
-                    for ind, line in enumerate(dict_list, 1)
-                }
-            }
+                return
+            runner.logger.info(log_str)
+            runner.visualizer.add_scalars(
+                tag, step=runner.iter + 1, file_path=self.json_log_path)
+            self.log_metrics(tag, step=runner.iter + 1)
 
 
 def prepare_dataset(ikdataset, split, output_dataset):
@@ -228,4 +181,3 @@ def prepare_dataset(ikdataset, split, output_dataset):
                 else:
                     return False
         return False
-    raise Exception

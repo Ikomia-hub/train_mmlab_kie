@@ -16,29 +16,75 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from ikomia import core, dataprocess
+from ikomia import dataprocess
 import copy
 from ikomia.core.task import TaskParam
-from ikomia.dnn import datasetio, dnntrain
+from ikomia.dnn import dnntrain
 import os
 import distutils
 from ikomia.core import config as ikcfg
-from train_mmlab_kie.utils import UserStop
 
 # Your imports below
 from pathlib import Path
 from datetime import datetime
-from mmcv import Config
 from train_mmlab_kie.utils import prepare_dataset, register_mmlab_modules
-import mmcv
-import torch
-from mmcv.runner import get_dist_info, init_dist, set_random_seed
-from mmcv.utils import get_git_hash
-from mmocr import __version__
-from mmocr.apis import train_detector
-from mmocr.datasets import build_dataset
-from mmocr.models import build_detector
-from mmocr.utils import collect_env, get_root_logger
+from mmengine.config import Config, ConfigDict
+from mmengine.logging import print_log
+from mmengine.runner import Runner
+from mmengine.visualization import Visualizer
+from mmocr.utils import register_all_modules
+import logging
+
+from typing import Union, Dict
+
+ConfigType = Union[Dict, Config, ConfigDict]
+
+
+class MyRunner(Runner):
+
+    @classmethod
+    def from_custom_cfg(cls, cfg, custom_hooks, visualizer) -> 'Runner':
+        """Build a runner from config.
+
+        Args:
+            cfg (ConfigType): A config used for building runner. Keys of
+                ``cfg`` can see :meth:`__init__`.
+
+        Returns:
+            Runner: A runner build from ``cfg``.
+        """
+        cfg = copy.deepcopy(cfg)
+        runner = cls(
+            model=cfg['model'],
+            work_dir=cfg['work_dir'],
+            train_dataloader=cfg.get('train_dataloader'),
+            val_dataloader=cfg.get('val_dataloader'),
+            test_dataloader=cfg.get('test_dataloader'),
+            train_cfg=cfg.get('train_cfg'),
+            val_cfg=cfg.get('val_cfg'),
+            test_cfg=cfg.get('test_cfg'),
+            auto_scale_lr=cfg.get('auto_scale_lr'),
+            optim_wrapper=cfg.get('optim_wrapper'),
+            param_scheduler=cfg.get('param_scheduler'),
+            val_evaluator=cfg.get('val_evaluator'),
+            test_evaluator=cfg.get('test_evaluator'),
+            default_hooks=cfg.get('default_hooks'),
+            custom_hooks=custom_hooks,
+            data_preprocessor=cfg.get('data_preprocessor'),
+            load_from=cfg.get('load_from'),
+            resume=cfg.get('resume', False),
+            launcher=cfg.get('launcher', 'none'),
+            env_cfg=cfg.get('env_cfg'),  # type: ignore
+            log_processor=cfg.get('log_processor'),
+            log_level=cfg.get('log_level', 'INFO'),
+            visualizer=visualizer,
+            default_scope=cfg.get('default_scope', 'mmengine'),
+            randomness=cfg.get('randomness', dict(seed=None)),
+            experiment_name=cfg.get('experiment_name'),
+            cfg=cfg,
+        )
+
+        return runner
 
 
 # --------------------
@@ -51,8 +97,8 @@ class TrainMmlabKieParam(TaskParam):
         TaskParam.__init__(self)
         self.cfg["model_name"] = "sdmgr"
         self.cfg["cfg"] = "sdmgr_novisual_60e_wildreceipt.py"
-        self.cfg["weights"] = "https://download.openmmlab.com/mmocr/kie/sdmgr/" \
-                              "sdmgr_novisual_60e_wildreceipt_20210405-07bc26ad.pth"
+        self.cfg["weights"] = "https://download.openmmlab.com/mmocr/kie/sdmgr/sdmgr_novisual_60e_wildreceipt" \
+                              "/sdmgr_novisual_60e_wildreceipt_20220831_193317-827649d8.pth"
         self.cfg["custom_cfg"] = ""
         self.cfg["pretrain"] = True
         self.cfg["epochs"] = 10
@@ -112,7 +158,9 @@ class TrainMmlabKie(dnntrain.TrainProcess):
         self.beginTaskRun()
         self.stop_train = False
 
+        # Get param
         param = self.getParam()
+
         # Get input dataset
         input = self.getInput(0)
 
@@ -120,7 +168,6 @@ class TrainMmlabKie(dnntrain.TrainProcess):
         str_datetime = datetime.now().strftime("%d-%m-%YT%Hh%Mm%Ss")
         if len(input.data) == 0:
             print("ERROR, there is no input dataset")
-            self.endTaskRun()
             return
 
         # Output directory
@@ -131,176 +178,132 @@ class TrainMmlabKie(dnntrain.TrainProcess):
         tb_logdir = os.path.join(ikcfg.main_cfg["tensorboard"]["log_uri"], str_datetime)
 
         # Transform Ikomia dataset to ICDAR compatible dataset if needed
-        openset = prepare_dataset(input.data, param.cfg["dataset_split_ratio"] / 100, param.cfg["dataset_folder"])
+        prepare_dataset(input.data, param.cfg["dataset_split_ratio"] / 100, param.cfg["dataset_folder"])
 
         # Create config from config file and parameters
         if not param.cfg["expert_mode"]:
             config = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs", "kie",
                                   param.cfg["model_name"], param.cfg["cfg"])
             cfg = Config.fromfile(config)
-            seed = None
+
+            if "class_list" not in input.data["metadata"]:
+                raise Exception("Dataset metadata should contain a key class_list. ")
+
+            if "dict_file" not in input.data["metadata"]:
+                raise Exception("Dataset metadata should contain a key dict_file")
+
+            with open(input.data["metadata"]["dict_file"], 'r') as f:
+                num_classes = len(f.read().rstrip().splitlines())
+
+            cfg.model.dictionary = dict(
+                type='Dictionary',
+                dict_file=input.data["metadata"]["dict_file"],
+                with_padding=True,
+                with_unknown=True,
+                unknown_token=None)
+
             cfg.work_dir = str(self.output_folder)
-            gpus = 1
-            launcher = "none"
-            deterministic = True
-            cfg.total_epochs = param.cfg["epochs"]
             eval_period = param.cfg["eval_period"]
-            cfg.data.samples_per_gpu = param.cfg["batch_size"]
-            cfg.data.workers_per_gpu = 0
-            cfg.train.ann_file = f'{param.cfg["dataset_folder"]}/train.txt'
-            cfg.train.dict_file = input.data['metadata']["dict_file"]
-            cfg.train.img_prefix = ''
-            cfg.test.ann_file = f'{param.cfg["dataset_folder"]}/test.txt'
-            cfg.test.dict_file = input.data['metadata']["dict_file"]
-            cfg.test.img_prefix = ''
-            cfg.model.class_list = input.data['metadata']["class_list"]
+            cfg.evaluation = dict(interval=eval_period, metric=["kie/macro_f1"],
+                                  rule="greater")
+            cfg.val_evaluator = dict(
+                type='F1Metric',
+                mode='macro',
+                num_classes=num_classes,
+                ignored_classes=input.data["metadata"]["eval_ignore"] if "eval_ignore" in input.data["metadata"]
+                else [])
+            cfg.test_evaluator = cfg.val_evaluator
 
-            cfg.data.train = cfg.train
-            cfg.data.test = cfg.test
-            cfg.data.val = cfg.test
+            cfg.data_root = str(Path(param.cfg["dataset_folder"]))
+            data_type = "WildReceiptDataset"
+            train = dict(
+                metainfo=input.data["metadata"]['class_list'],
+                type=data_type,
+                ann_file=str(Path(cfg.data_root) / 'train.txt'),
+                data_prefix=dict(img_path=''),
+                pipeline=cfg.train_pipeline)
+            test = dict(
+                metainfo=input.data["metadata"]['class_list'],
+                type=data_type,
+                ann_file=str(Path(cfg.data_root) / 'test.txt'),
+                data_prefix=dict(img_path=''),
+                pipeline=cfg.test_pipeline)
 
-            cfg.dataset_type = 'MyKIEDataset'
-            cfg.train.type = 'MyKIEDataset'
-            cfg.test.type = 'MyKIEDataset'
+            cfg.train_dataloader.dataset = train
+            cfg.test_dataloader.dataset = test
+            cfg.val_dataloader.dataset = test
 
-            cfg.model.bbox_head['num_classes'] = len(input.data["metadata"]["category_names"])
-            with open(input.data['metadata']["dict_file"], 'r') as f:
-                num_chars = len(f.readlines())
-            cfg.model.bbox_head['num_chars'] = num_chars
+            cfg.train_dataloader.batch_size = param.cfg["batch_size"]
+            cfg.train_dataloader.num_workers = 0
+            cfg.train_dataloader.persistent_workers = False
 
-            print("OPENSET : " + str(openset))
-            if openset:
-                cfg.evaluation = dict(
-                    interval=eval_period,
-                    metric='openset_f1',
-                    metric_options=dict(
-                        openset_f1=dict(
-                            ignores=input.data['metadata']['eval_ignore'])),
-                    save_best='auto',
-                    rule='greater')
-                cfg.dataset_type = 'MyOpensetKIEDataset'
-                cfg.train.type = 'MyOpensetKIEDataset'
-                cfg.test.type = 'MyOpensetKIEDataset'
-                cfg.train.node_classes = len(input.data["metadata"]["category_names"])
-                cfg.test.node_classes = len(input.data["metadata"]["category_names"])
+            cfg.test_dataloader.batch_size = param.cfg["batch_size"]
+            cfg.test_dataloader.num_workers = 0
+            cfg.test_dataloader.persistent_workers = False
 
-            else:
-                cfg.evaluation = dict(
-                    interval=eval_period,
-                    metric='macro_f1',
-                    metric_options=dict(
-                        macro_f1=dict(
-                            ignores=input.data['metadata']['eval_ignore'])),
-                    save_best='auto',
-                    rule='greater')
+            cfg.val_dataloader.batch_size = param.cfg["batch_size"]
+            cfg.val_dataloader.num_workers = 0
+            cfg.val_dataloader.persistent_workers = False
 
-            cfg.log_config = dict(
-                interval=5,
-
-                hooks=[
-                    dict(type='TextLoggerHook'),
-                    dict(type='TensorboardLoggerHook', log_dir=tb_logdir)
-                ])
-            cfg.checkpoint_config = None
             cfg.load_from = param.cfg["weights"] if param.cfg["pretrain"] else None
 
+            cfg.train_cfg.max_epochs = param.cfg["epochs"]
+            cfg.train_cfg.val_interval = eval_period
+
         else:
-            config = param.cfg["custom_model"]
+            config = param.cfg["custom_cfg"]
             cfg = Config.fromfile(config)
 
-        no_validate = cfg.evaluation.interval <= 0 or param.cfg["dataset_split_ratio"] == 100
+        amp = True
+        # save only best and last checkpoint
+        cfg.checkpoint_config = None
+        if "checkpoint" in cfg.default_hooks:
+            cfg.default_hooks.checkpoint["interval"] = -1
+            cfg.default_hooks.checkpoint["save_best"] = 'kie/macro_f1'
+            cfg.default_hooks.checkpoint["rule"] = 'greater'
 
-        # import modules from string list.
-        if cfg.get('custom_imports', None):
-            from mmcv.utils import import_modules_from_strings
-            import_modules_from_strings(**cfg['custom_imports'])
-        # set cudnn_benchmark
-        if cfg.get('cudnn_benchmark', False):
-            torch.backends.cudnn.benchmark = True
+        cfg.visualizer.vis_backends = [dict(type='TensorboardVisBackend', save_dir=tb_logdir)]
 
-        cfg.gpu_ids = range(1) if gpus is None else range(gpus)
-        # init distributed env first, since logger depends on the dist info.
-        if launcher == 'none':
-            distributed = False
-        else:
-            distributed = True
-            init_dist(launcher, **cfg.dist_params)
-            # re-set gpu_ids with distributed training mode
-            _, world_size = get_dist_info()
-            cfg.gpu_ids = range(world_size)
+        try:
+            visualizer = Visualizer.get_current_instance()
+        except:
+            visualizer = cfg.get('visualizer')
 
-        # create work_dir
-        mmcv.mkdir_or_exist(os.path.abspath(cfg.work_dir))
-        # dump config
-        cfg.dump(os.path.join(cfg.work_dir, os.path.basename(config)))
-        # init the logger before other steps
-        timestamp = str_datetime
-        log_file = os.path.join(cfg.work_dir, f'{timestamp}.log')
-        logger = get_root_logger(log_file=log_file, log_level=cfg.log_level)
+        # register all modules in mmdet into the registries
+        # do not init the default scope here because it will be init in the runner
+        register_all_modules(init_default_scope=False)
 
-        # init the meta dict to record some important information such as
-        # environment info and seed, which will be logged
-        meta = dict()
-        # log env info
-        env_info_dict = collect_env()
-        env_info = '\n'.join([(f'{k}: {v}') for k, v in env_info_dict.items()])
-        dash_line = '-' * 60 + '\n'
-        logger.info('Environment info:\n' + dash_line + env_info + '\n' +
-                    dash_line)
-        meta['env_info'] = env_info
-        meta['config'] = cfg.pretty_text
-        # log some basic info
-        logger.info(f'Distributed training: {distributed}')
-        logger.info(f'Config:\n{cfg.pretty_text}')
+        # enable automatic-mixed-precision training
+        if amp:
+            optim_wrapper = cfg.optim_wrapper.type
+            if optim_wrapper == 'AmpOptimWrapper':
+                print_log(
+                    'AMP training is already enabled in your config.',
+                    logger='current',
+                    level=logging.WARNING)
+            else:
+                assert optim_wrapper == 'OptimWrapper', (
+                    '`--amp` is only supported when the optimizer wrapper type is '
+                    f'`OptimWrapper` but got {optim_wrapper}.')
+                cfg.optim_wrapper.type = 'AmpOptimWrapper'
+                cfg.optim_wrapper.loss_scale = 'dynamic'
 
-        # set random seeds
-        if seed is not None:
-            logger.info(f'Set random seed to {seed}, '
-                        f'deterministic: {deterministic}')
-            set_random_seed(seed, deterministic=deterministic)
-        cfg.seed = seed
-        meta['seed'] = seed
-        meta['exp_name'] = os.path.basename(config)
-
-        model = build_detector(
-            cfg.model,
-            train_cfg=cfg.get('train_cfg'),
-            test_cfg=cfg.get('test_cfg'))
-        model.init_weights()
-
-        datasets = [build_dataset(cfg.data.train)]
-
-        if cfg.checkpoint_config is not None:
-            # save mmdet version, config file content and class names in
-            # checkpoints as meta data
-            cfg.checkpoint_config.meta = dict(
-                mmocr_version=__version__ + get_git_hash()[:7],
-                CLASSES=datasets[0].CLASSES)
-        # add an attribute for visualization convenience
-        model.CLASSES = datasets[0].CLASSES
-
-        # add here custom hook to stop process when user clicks stop button
-        cfg.custom_hooks = [
+        custom_hooks = [
             dict(type='CustomHook', stop=self.get_stop, output_folder=str(self.output_folder),
                  emitStepProgress=self.emitStepProgress, priority='LOWEST'),
             dict(type='CustomMlflowLoggerHook', log_metrics=self.log_metrics)
         ]
 
-        print("Starting training...")
-        try:
-            train_detector(
-                model,
-                datasets,
-                cfg,
-                distributed=distributed,
-                validate=not no_validate,
-                timestamp=timestamp,
-                meta=meta)
-        except UserStop:
-            print("Training stopped by user")
+        # build the runner from config
+        runner = MyRunner.from_custom_cfg(cfg, custom_hooks, visualizer)
+
+        # add custom hook to stop process and save the latest model each epoch
+
+        runner.cfg = cfg
+        # start training
+        runner.train()
 
         print("Training finished!")
-
         # Call endTaskRun to finalize process
         self.endTaskRun()
 
