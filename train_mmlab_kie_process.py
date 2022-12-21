@@ -207,11 +207,11 @@ class TrainMmlabKie(dnntrain.TrainProcess):
 
             cfg.work_dir = str(self.output_folder)
             eval_period = param.cfg["eval_period"]
-            cfg.evaluation = dict(interval=eval_period, metric=["kie/macro_f1"],
+            cfg.evaluation = dict(interval=eval_period, metric=["kie/micro_f1"],
                                   rule="greater")
             cfg.val_evaluator = dict(
                 type='F1Metric',
-                mode='macro',
+                mode='micro',
                 num_classes=num_classes,
                 ignored_classes=input.data["metadata"]["eval_ignore"] if "eval_ignore" in input.data["metadata"]
                 else [])
@@ -223,14 +223,14 @@ class TrainMmlabKie(dnntrain.TrainProcess):
                 metainfo=input.data["metadata"]['class_list'],
                 type=data_type,
                 ann_file=str(Path(cfg.data_root) / 'train.txt'),
-                data_prefix=dict(img_path=''),
                 pipeline=cfg.train_pipeline)
             test = dict(
                 metainfo=input.data["metadata"]['class_list'],
                 type=data_type,
                 ann_file=str(Path(cfg.data_root) / 'test.txt'),
-                data_prefix=dict(img_path=''),
-                pipeline=cfg.test_pipeline)
+                pipeline=cfg.test_pipeline,
+                test_mode=True
+            )
 
             cfg.train_dataloader.dataset = train
             cfg.test_dataloader.dataset = test
@@ -262,7 +262,7 @@ class TrainMmlabKie(dnntrain.TrainProcess):
         cfg.checkpoint_config = None
         if "checkpoint" in cfg.default_hooks:
             cfg.default_hooks.checkpoint["interval"] = -1
-            cfg.default_hooks.checkpoint["save_best"] = 'kie/macro_f1'
+            cfg.default_hooks.checkpoint["save_best"] = 'kie/micro_f1'
             cfg.default_hooks.checkpoint["rule"] = 'greater'
 
         cfg.visualizer.vis_backends = [dict(type='TensorboardVisBackend', save_dir=tb_logdir)]
