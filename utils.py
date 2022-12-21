@@ -35,7 +35,7 @@ def register_mmlab_modules():
                         mode: str = 'train') -> None:
             # Check if training must be stopped and save last model
             if self.stop():
-                runner.save_checkpoint(self.output_folder, "latest.pth", create_symlink=False)
+                runner.save_checkpoint(self.output_folder, "latest.pth")
                 raise UserStop
 
     @HOOKS.register_module(force=True)
