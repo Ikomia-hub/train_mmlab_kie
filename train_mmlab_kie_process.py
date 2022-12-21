@@ -300,8 +300,6 @@ class TrainMmlabKie(dnntrain.TrainProcess):
         # build the runner from config
         runner = MyRunner.from_custom_cfg(cfg, custom_hooks, visualizer)
 
-        # add custom hook to stop process and save the latest model each epoch
-
         runner.cfg = cfg
         # start training
         runner.train()
