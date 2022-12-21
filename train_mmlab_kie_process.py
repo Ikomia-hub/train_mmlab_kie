@@ -34,7 +34,7 @@ from mmengine.runner import Runner
 from mmengine.visualization import Visualizer
 from mmocr.utils import register_all_modules
 import logging
-
+import shutil
 from typing import Union, Dict
 
 ConfigType = Union[Dict, Config, ConfigDict]
@@ -194,6 +194,9 @@ class TrainMmlabKie(dnntrain.TrainProcess):
 
             with open(input.data["metadata"]["dict_file"], 'r') as f:
                 num_classes = len(f.read().rstrip().splitlines())
+
+            shutil.copy2(input.data["metadata"]["dict_file"], self.output_folder)
+            shutil.copy2(input.data["metadata"]["class_list"], self.output_folder)
 
             cfg.model.dictionary = dict(
                 type='Dictionary',
