@@ -5,7 +5,6 @@ import json
 from mmengine.registry import HOOKS
 from mmengine.hooks import Hook
 from mmengine.hooks import LoggerHook
-from mmengine.dist import master_only
 from typing import Optional, Sequence, Union, Dict
 
 DATA_BATCH = Optional[Union[dict, tuple, list]]
