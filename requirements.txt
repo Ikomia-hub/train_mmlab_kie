@@ -5,3 +5,5 @@ torchvision==0.10.0
 mmcv-full==1.4.7
 mmdet==2.20.0
 mmocr==0.5.0
+
+pillow<=9.5.0
