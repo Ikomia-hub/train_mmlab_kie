@@ -84,6 +84,12 @@ class TrainMmlabKieWidget(core.CWorkflowTaskWidget):
                                                                   path=self.parameters.cfg["dataset_folder"],
                                                                   tooltip="Select folder",
                                                                   mode=QFileDialog.Directory)
+
+        # Pretrained model weight
+        self.browse_model_weight_file = pyqtutils.append_browse_file(self.grid_layout, label="Pretrained model weights",
+                                                                     path=self.parameters.cfg["model_weight_file"],
+                                                                     tooltip="Select file",
+                                                                     mode=QFileDialog.ExistingFile)
         # Expert mode
         self.check_expert = pyqtutils.append_check(self.grid_layout, "Expert mode",
                                                    self.parameters.cfg["expert_mode"])
@@ -91,7 +97,7 @@ class TrainMmlabKieWidget(core.CWorkflowTaskWidget):
 
         # Custom Model
         self.label_model = QLabel("Model config file (.py)")
-        self.browse_cfg_file = pyqtutils.BrowseFileWidget(path=self.parameters.cfg["custom_cfg"],
+        self.browse_cfg_file = pyqtutils.BrowseFileWidget(path=self.parameters.cfg["config_file"],
                                                           tooltip="Select file",
                                                           mode=QFileDialog.ExistingFile)
         row = self.grid_layout.rowCount()
@@ -110,20 +116,19 @@ class TrainMmlabKieWidget(core.CWorkflowTaskWidget):
         layout_ptr = qtconversion.PyQtToQt(self.grid_layout)
 
         # Set widget layout
-        self.setLayout(layout_ptr)
+        self.set_layout(layout_ptr)
 
     def on_expert_mode_change(self, int):
         self.label_model.setVisible(self.check_expert.isChecked())
         self.browse_cfg_file.setVisible(self.check_expert.isChecked())
-        self.label_pretrain.setVisible(self.check_expert.isChecked())
-        self.browse_pretrain_file.setVisible(self.check_expert.isChecked())
 
-        self.spin_batch.setEnabled(not self.check_expert.isChecked())
-        self.spin_epochs.setEnabled(not self.check_expert.isChecked())
-        self.spin_eval_period.setEnabled(not self.check_expert.isChecked())
-        self.combo_model.setEnabled(not self.check_expert.isChecked())
+        self.spin_batch.setVisible(not self.check_expert.isChecked())
+        self.spin_epochs.setVisible(not self.check_expert.isChecked())
+        self.spin_eval_period.setVisible(not self.check_expert.isChecked())
+        self.combo_model.setVisible(not self.check_expert.isChecked())
+        self.combo_config.setVisible(not self.check_expert.isChecked())
 
-    def on_combo_model_changed(self, int):
+    def on_combo_model_changed(self, model_name):
         if self.combo_model.currentText() != "":
             self.combo_config.clear()
             current_model = self.combo_model.currentText()
@@ -133,20 +138,18 @@ class TrainMmlabKieWidget(core.CWorkflowTaskWidget):
                 with open(yaml_file, "r") as f:
                     models_list = yaml.load(f, Loader=yaml.FullLoader)['Models']
 
-                self.available_cfg_ckpt = {model_dict["Name"]: {'cfg': model_dict["Config"],
-                                                                'ckpt': model_dict["Weights"]}
-                                           for
-                                           model_dict in models_list}
-                for experiment_name in self.available_cfg_ckpt.keys():
+                available_cfg = [os.path.splitext(os.path.basename(model_dict["Config"]))[0] for model_dict in
+                                 models_list]
+                for experiment_name in available_cfg:
                     self.combo_config.addItem(experiment_name)
                     config_names.append(experiment_name)
-                selected_cfg = self.parameters.cfg["cfg"].replace(".py", "")
+                selected_cfg = os.path.splitext(self.parameters.cfg["cfg"])[0]
                 if selected_cfg in config_names:
                     self.combo_config.setCurrentText(selected_cfg)
                 else:
-                    self.combo_config.setCurrentText(list(self.available_cfg_ckpt.keys())[0])
+                    self.combo_config.setCurrentText(available_cfg[0])
 
-    def onApply(self):
+    def on_apply(self):
         # Apply button clicked slot
 
         # Get parameters from widget
@@ -156,15 +159,15 @@ class TrainMmlabKieWidget(core.CWorkflowTaskWidget):
         self.parameters.cfg["eval_period"] = self.spin_eval_period.value()
         self.parameters.cfg["dataset_split_ratio"] = self.spin_train_test.value()
         self.parameters.cfg["expert_mode"] = self.check_expert.isChecked()
-        self.parameters.cfg["custom_cfg"] = self.browse_cfg_file.path
+        self.parameters.cfg["config_file"] = self.browse_cfg_file.path
+        self.parameters.cfg["model_weight_file"] = self.browse_model_weight_file.path
         self.parameters.cfg["dataset_folder"] = self.browse_dataset_folder.path
         self.parameters.cfg["output_folder"] = self.browse_out_folder.path
         self.parameters.cfg["pretrain"] = self.check_pretrain.isChecked()
         self.parameters.cfg["cfg"] = self.combo_config.currentText()+".py"
 
-
         # Send signal to launch the process
-        self.emitApply(self.parameters)
+        self.emit_apply(self.parameters)
 
 
 # --------------------

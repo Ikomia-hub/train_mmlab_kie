@@ -16,12 +16,12 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from ikomia import dataprocess
+from ikomia import core, dataprocess
 import copy
 from ikomia.core.task import TaskParam
 from ikomia.dnn import dnntrain
 import os
-import distutils
+from ikomia.utils import strtobool
 from ikomia.core import config as ikcfg
 
 # Your imports below
@@ -36,6 +36,7 @@ from mmocr.utils import register_all_modules
 import logging
 import shutil
 from typing import Union, Dict
+import yaml
 
 ConfigType = Union[Dict, Config, ConfigDict]
 
@@ -97,9 +98,8 @@ class TrainMmlabKieParam(TaskParam):
         TaskParam.__init__(self)
         self.cfg["model_name"] = "sdmgr"
         self.cfg["cfg"] = "sdmgr_novisual_60e_wildreceipt.py"
-        self.cfg["weights"] = "https://download.openmmlab.com/mmocr/kie/sdmgr/sdmgr_novisual_60e_wildreceipt" \
-                              "/sdmgr_novisual_60e_wildreceipt_20220831_193317-827649d8.pth"
-        self.cfg["custom_cfg"] = ""
+        self.cfg["model_weight_file"] = ""
+        self.cfg["config_file"] = ""
         self.cfg["pretrain"] = True
         self.cfg["epochs"] = 10
         self.cfg["batch_size"] = 32
@@ -109,19 +109,19 @@ class TrainMmlabKieParam(TaskParam):
         self.cfg["dataset_folder"] = os.path.dirname(os.path.realpath(__file__)) + "/dataset"
         self.cfg["expert_mode"] = False
 
-    def setParamMap(self, param_map):
+    def set_values(self, param_map):
         self.cfg["model_name"] = param_map["model_name"]
         self.cfg["cfg"] = param_map["cfg"]
-        self.cfg["custom_cfg"] = param_map["custom_cfg"]
-        self.cfg["weights"] = param_map["weights"]
-        self.cfg["pretrain"] = distutils.util.strtobool(param_map["pretrain"])
+        self.cfg["config_file"] = param_map["config_file"]
+        self.cfg["model_weight_file"] = param_map["model_weight_file"]
+        self.cfg["pretrain"] = strtobool(param_map["pretrain"])
         self.cfg["epochs"] = int(param_map["epochs"])
         self.cfg["batch_size"] = int(param_map["batch_size"])
         self.cfg["dataset_split_ratio"] = int(param_map["dataset_split_ratio"])
         self.cfg["output_folder"] = param_map["output_folder"]
         self.cfg["eval_period"] = int(param_map["eval_period"])
         self.cfg["dataset_folder"] = param_map["dataset_folder"]
-        self.cfg["expert_mode"] = distutils.util.strtobool(param_map["expert_mode"])
+        self.cfg["expert_mode"] = strtobool(param_map["expert_mode"])
 
 
 # --------------------
@@ -137,16 +137,16 @@ class TrainMmlabKie(dnntrain.TrainProcess):
 
         # Variable to check if the training must be stopped by user
         self.stop_train = False
-        self.output_folder = ""
+        self.out_folder = ""
         if param is None:
-            self.setParam(TrainMmlabKieParam())
+            self.set_param_object(TrainMmlabKieParam())
         else:
-            self.setParam(copy.deepcopy(param))
+            self.set_param_object(copy.deepcopy(param))
 
-    def getProgressSteps(self, eltCount=1):
+    def get_progress_steps(self, eltCount=1):
         # Function returning the number of progress steps for this process
         # This is handled by the main progress bar of Ikomia application
-        param = self.getParam()
+        param = self.get_param_object()
         if param is not None:
             return param.cfg["epochs"]
         else:
@@ -154,15 +154,15 @@ class TrainMmlabKie(dnntrain.TrainProcess):
 
     def run(self):
         # Core function of your process
-        # Call beginTaskRun for initialization
-        self.beginTaskRun()
+        # Call begin_task_run for initialization
+        self.begin_task_run()
         self.stop_train = False
 
         # Get param
-        param = self.getParam()
+        param = self.get_param_object()
 
         # Get input dataset
-        input = self.getInput(0)
+        input = self.get_input(0)
 
         # Current datetime is used as folder name
         str_datetime = datetime.now().strftime("%d-%m-%YT%Hh%Mm%Ss")
@@ -171,8 +171,8 @@ class TrainMmlabKie(dnntrain.TrainProcess):
             return
 
         # Output directory
-        self.output_folder = Path(param.cfg["output_folder"] + "/" + str_datetime)
-        self.output_folder.mkdir(parents=True, exist_ok=True)
+        self.out_folder = Path(param.cfg["output_folder"] + "/" + str_datetime)
+        self.out_folder.mkdir(parents=True, exist_ok=True)
 
         # Tensorboard
         tb_logdir = os.path.join(ikcfg.main_cfg["tensorboard"]["log_uri"], str_datetime)
@@ -182,8 +182,7 @@ class TrainMmlabKie(dnntrain.TrainProcess):
 
         # Create config from config file and parameters
         if not param.cfg["expert_mode"]:
-            config = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs", "kie",
-                                  param.cfg["model_name"], param.cfg["cfg"])
+            config, ckpt = self.get_cfg_and_weights_from_name(param)
             cfg = Config.fromfile(config)
 
             if "class_list" not in input.data["metadata"]:
@@ -195,8 +194,8 @@ class TrainMmlabKie(dnntrain.TrainProcess):
             with open(input.data["metadata"]["dict_file"], 'r') as f:
                 num_classes = len(f.read().rstrip().splitlines())
 
-            shutil.copy2(input.data["metadata"]["dict_file"], self.output_folder)
-            shutil.copy2(input.data["metadata"]["class_list"], self.output_folder)
+            shutil.copy2(input.data["metadata"]["dict_file"], self.out_folder)
+            shutil.copy2(input.data["metadata"]["class_list"], self.out_folder)
 
             cfg.model.dictionary = dict(
                 type='Dictionary',
@@ -205,7 +204,7 @@ class TrainMmlabKie(dnntrain.TrainProcess):
                 with_unknown=True,
                 unknown_token=None)
 
-            cfg.work_dir = str(self.output_folder)
+            cfg.work_dir = str(self.out_folder)
             eval_period = param.cfg["eval_period"]
             cfg.evaluation = dict(interval=eval_period, metric=["kie/micro_f1"],
                                   rule="greater")
@@ -248,13 +247,13 @@ class TrainMmlabKie(dnntrain.TrainProcess):
             cfg.val_dataloader.num_workers = 0
             cfg.val_dataloader.persistent_workers = False
 
-            cfg.load_from = param.cfg["weights"] if param.cfg["pretrain"] else None
+            cfg.load_from = ckpt if param.cfg["pretrain"] else None
 
             cfg.train_cfg.max_epochs = param.cfg["epochs"]
             cfg.train_cfg.val_interval = eval_period
 
         else:
-            config = param.cfg["custom_cfg"]
+            config = param.cfg["config_file"]
             cfg = Config.fromfile(config)
 
         amp = True
@@ -292,8 +291,8 @@ class TrainMmlabKie(dnntrain.TrainProcess):
                 cfg.optim_wrapper.loss_scale = 'dynamic'
 
         custom_hooks = [
-            dict(type='CustomHook', stop=self.get_stop, output_folder=str(self.output_folder),
-                 emitStepProgress=self.emitStepProgress, priority='LOWEST'),
+            dict(type='CustomHook', stop=self.get_stop, output_folder=str(self.out_folder),
+                 emit_step_progress=self.emit_step_progress, priority='LOWEST'),
             dict(type='CustomMlflowLoggerHook', log_metrics=self.log_metrics)
         ]
 
@@ -305,8 +304,54 @@ class TrainMmlabKie(dnntrain.TrainProcess):
         runner.train()
 
         print("Training finished!")
-        # Call endTaskRun to finalize process
-        self.endTaskRun()
+        # Call end_task_run to finalize process
+        self.end_task_run()
+
+    @staticmethod
+    def get_model_zoo():
+        configs_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs", "kie")
+        available_pairs = []
+        for model_name in os.listdir(configs_folder):
+            if model_name.startswith('_'):
+                continue
+            yaml_file = os.path.join(configs_folder, model_name, "metafile.yml")
+            if os.path.isfile(yaml_file):
+                with open(yaml_file, "r") as f:
+                    models_list = yaml.load(f, Loader=yaml.FullLoader)
+                    if 'Models' in models_list:
+                        models_list = models_list['Models']
+                    if not isinstance(models_list, list):
+                        continue
+                for model_dict in models_list:
+                    available_pairs.append({"model_name": model_name, "cfg": os.path.basename(model_dict["Name"])})
+        return available_pairs
+
+    @staticmethod
+    def get_cfg_and_weights_from_name(param):
+        model_name = param.cfg["model_name"]
+        model_config = param.cfg["cfg"]
+        yaml_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs", "kie", model_name,
+                                 "metafile.yml")
+
+        if model_config.endswith('.py'):
+            model_config = model_config[:-3]
+        if os.path.isfile(yaml_file):
+            with open(yaml_file, "r") as f:
+                models_list = yaml.load(f, Loader=yaml.FullLoader)['Models']
+
+            available_cfg_ckpt = {model_dict["Name"]: {'cfg': model_dict["Config"],
+                                                       'ckpt': model_dict["Weights"]}
+                                  for model_dict in models_list}
+            if model_config in available_cfg_ckpt:
+                cfg_file = available_cfg_ckpt[model_config]['cfg']
+                ckpt_file = available_cfg_ckpt[model_config]['ckpt'] if param.cfg["model_weight_file"] == "" else param.cfg["model_weight_file"]
+                cfg_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), cfg_file)
+            else:
+                raise Exception(
+                    f"{model_config} does not exist for {model_name}. Available configs for are {', '.join(list(available_cfg_ckpt.keys()))}")
+        else:
+            raise Exception(f"Model name {model_name} does not exist.")
+        return cfg_file, ckpt_file
 
     def get_stop(self):
         return self.stop_train
@@ -326,15 +371,11 @@ class TrainMmlabKieFactory(dataprocess.CTaskFactory):
         dataprocess.CTaskFactory.__init__(self)
         # Set process information as string here
         self.info.name = "train_mmlab_kie"
-        self.info.shortDescription = "your short description"
-        self.info.description = "Training process for MMOCR from MMLAB in key information extraction." \
-                                "You can choose a predefined model configuration from MMLAB's " \
-                                "model zoo or use custom models and custom pretrained weights " \
-                                "by ticking Expert mode button."
+        self.info.short_description = "Train for MMOCR from MMLAB KIE models"
         # relative path -> as displayed in Ikomia application process tree
-        self.info.path = "Plugins/Python"
-        self.info.version = "1.0.0"
-        self.info.iconPath = "icons/mmlab.png"
+        self.info.path = "Plugins/Python/Text"
+        self.info.version = "2.0.0"
+        self.info.icon_path = "icons/mmlab.png"
         self.info.authors = "Kuang, Zhanghui and Sun, Hongbin and Li, Zhizhong and Yue, Xiaoyu and Lin," \
                             " Tsui Hin and Chen, Jianyong and Wei, Huaqiang and Zhu, Yiqin and Gao, Tong and Zhang," \
                             " Wenwei and Chen, Kai and Zhang, Wayne and Lin, Dahua"
@@ -343,11 +384,15 @@ class TrainMmlabKieFactory(dataprocess.CTaskFactory):
         self.info.year = 2021
         self.info.license = "Apache-2.0 License"
         # URL of documentation
-        self.info.documentationLink = "https://mmocr.readthedocs.io/en/latest/"
+        self.info.documentation_link = "https://mmocr.readthedocs.io/en/latest/"
         # Code source repository
-        self.info.repository = "https://github.com/open-mmlab/mmocr"
+        self.info.original_repository = "https://github.com/open-mmlab/mmocr"
+
+        self.info.repository = "https://github.com/Ikomia-hub/train_mmlab_kie"
         # Keywords used for search
-        self.info.keywords = "train, mmlab, mmocr, kie, key, information, extraction, sdmgr"
+        self.info.keywords = "train, key, information, extraction, kie, mmlab, sdmgr"
+        self.info.algo_type = core.AlgoType.TRAIN
+        self.info.algo_tasks = "OCR"
 
     def create(self, param=None):
         # Create process object
