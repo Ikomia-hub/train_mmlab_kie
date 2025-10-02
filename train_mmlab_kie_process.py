@@ -15,28 +15,28 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
+import copy
+import os
+from pathlib import Path
+from datetime import datetime
+import logging
+import shutil
+from typing import Union, Dict
+import yaml
 
 from ikomia import core, dataprocess
-import copy
 from ikomia.core.task import TaskParam
 from ikomia.dnn import dnntrain
-import os
 from ikomia.utils import strtobool
 from ikomia.core import config as ikcfg
 
-# Your imports below
-from pathlib import Path
-from datetime import datetime
-from train_mmlab_kie.utils import prepare_dataset, register_mmlab_modules
 from mmengine.config import Config, ConfigDict
 from mmengine.logging import print_log
 from mmengine.runner import Runner
 from mmengine.visualization import Visualizer
 from mmocr.utils import register_all_modules
-import logging
-import shutil
-from typing import Union, Dict
-import yaml
+
+from train_mmlab_kie.utils import prepare_dataset, register_mmlab_modules
 
 ConfigType = Union[Dict, Config, ConfigDict]
 
@@ -138,6 +138,7 @@ class TrainMmlabKie(dnntrain.TrainProcess):
         # Variable to check if the training must be stopped by user
         self.stop_train = False
         self.out_folder = ""
+
         if param is None:
             self.set_param_object(TrainMmlabKieParam())
         else:
@@ -162,11 +163,11 @@ class TrainMmlabKie(dnntrain.TrainProcess):
         param = self.get_param_object()
 
         # Get input dataset
-        input = self.get_input(0)
+        dataset_input = self.get_input(0)
 
         # Current datetime is used as folder name
         str_datetime = datetime.now().strftime("%d-%m-%YT%Hh%Mm%Ss")
-        if len(input.data) == 0:
+        if len(dataset_input.data) == 0:
             print("ERROR, there is no input dataset")
             return
 
@@ -374,8 +375,10 @@ class TrainMmlabKieFactory(dataprocess.CTaskFactory):
         self.info.short_description = "Train for MMOCR from MMLAB KIE models"
         # relative path -> as displayed in Ikomia application process tree
         self.info.path = "Plugins/Python/Text"
-        self.info.version = "2.0.1"
-        self.info.max_python_version = "3.10.0"
+        self.info.version = "2.1.0"
+        self.info.max_python_version = "3.9"
+        self.info.max_python_version = "3.11"
+        self.info.min_ikomia_version = "0.15.0"
         self.info.icon_path = "icons/mmlab.png"
         self.info.authors = "Kuang, Zhanghui and Sun, Hongbin and Li, Zhizhong and Yue, Xiaoyu and Lin," \
                             " Tsui Hin and Chen, Jianyong and Wei, Huaqiang and Zhu, Yiqin and Gao, Tong and Zhang," \
@@ -394,6 +397,10 @@ class TrainMmlabKieFactory(dataprocess.CTaskFactory):
         self.info.keywords = "train, key, information, extraction, kie, mmlab, sdmgr"
         self.info.algo_type = core.AlgoType.TRAIN
         self.info.algo_tasks = "OCR"
+        self.info.hardware_config.min_cpu = 4
+        self.info.hardware_config.min_ram = 8
+        self.info.hardware_config.gpu_required = True
+        self.info.hardware_config.min_vram = 16
 
     def create(self, param=None):
         # Create process object
