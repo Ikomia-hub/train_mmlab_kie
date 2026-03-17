@@ -1,29 +1,14 @@
-# Copyright (C) 2021 Ikomia SAS
-# Contact: https://www.ikomia.com
-#
-# This file is part of the IkomiaStudio software.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU Affero General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Affero General Public License for more details.
-#
-# You should have received a copy of the GNU Affero General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+import os
+import yaml
+
+# PyQt GUI framework
+from PyQt6.QtWidgets import *
 
 from ikomia import core, dataprocess
 from ikomia.utils import pyqtutils, qtconversion
+
 from train_mmlab_kie.train_mmlab_kie_process import TrainMmlabKieParam
 
-# PyQt GUI framework
-from PyQt5.QtWidgets import *
-import os
-import yaml
 
 # --------------------
 # - Class which implements widget associated with the process
@@ -83,13 +68,13 @@ class TrainMmlabKieWidget(core.CWorkflowTaskWidget):
         self.browse_dataset_folder = pyqtutils.append_browse_file(self.grid_layout, label="Dataset folder",
                                                                   path=self.parameters.cfg["dataset_folder"],
                                                                   tooltip="Select folder",
-                                                                  mode=QFileDialog.Directory)
+                                                                  mode=QFileDialog.FileMode.Directory)
 
         # Pretrained model weight
         self.browse_model_weight_file = pyqtutils.append_browse_file(self.grid_layout, label="Pretrained model weights",
                                                                      path=self.parameters.cfg["model_weight_file"],
                                                                      tooltip="Select file",
-                                                                     mode=QFileDialog.ExistingFile)
+                                                                     mode=QFileDialog.FileMode.ExistingFile)
         # Expert mode
         self.check_expert = pyqtutils.append_check(self.grid_layout, "Expert mode",
                                                    self.parameters.cfg["expert_mode"])
@@ -99,7 +84,7 @@ class TrainMmlabKieWidget(core.CWorkflowTaskWidget):
         self.label_model = QLabel("Model config file (.py)")
         self.browse_cfg_file = pyqtutils.BrowseFileWidget(path=self.parameters.cfg["config_file"],
                                                           tooltip="Select file",
-                                                          mode=QFileDialog.ExistingFile)
+                                                          mode=QFileDialog.FileMode.ExistingFile)
         row = self.grid_layout.rowCount()
         self.grid_layout.addWidget(self.label_model, row, 0)
         self.grid_layout.addWidget(self.browse_cfg_file, row, 1)
