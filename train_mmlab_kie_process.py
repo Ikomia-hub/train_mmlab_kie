@@ -87,9 +87,11 @@ class TrainMmlabKieParam(TaskParam):
         self.cfg["epochs"] = 10
         self.cfg["batch_size"] = 32
         self.cfg["dataset_split_ratio"] = 90
-        self.cfg["output_folder"] = os.path.dirname(os.path.realpath(__file__)) + "/runs/"
+        self.cfg["output_folder"] = os.path.dirname(
+            os.path.realpath(__file__)) + "/runs/"
         self.cfg["eval_period"] = 1
-        self.cfg["dataset_folder"] = os.path.dirname(os.path.realpath(__file__)) + "/dataset"
+        self.cfg["dataset_folder"] = os.path.dirname(
+            os.path.realpath(__file__)) + "/dataset"
         self.cfg["expert_mode"] = False
 
     def set_values(self, param_map):
@@ -159,10 +161,12 @@ class TrainMmlabKie(dnntrain.TrainProcess):
         self.out_folder.mkdir(parents=True, exist_ok=True)
 
         # Tensorboard
-        tb_logdir = os.path.join(ikcfg.main_cfg["tensorboard"]["log_uri"], str_datetime)
+        tb_logdir = os.path.join(
+            ikcfg.main_cfg["tensorboard"]["log_uri"], str_datetime)
 
         # Transform Ikomia dataset to ICDAR compatible dataset if needed
-        prepare_dataset(input.data, param.cfg["dataset_split_ratio"] / 100, param.cfg["dataset_folder"])
+        prepare_dataset(
+            input.data, param.cfg["dataset_split_ratio"] / 100, param.cfg["dataset_folder"])
 
         # Create config from config file and parameters
         if not param.cfg["expert_mode"]:
@@ -170,10 +174,12 @@ class TrainMmlabKie(dnntrain.TrainProcess):
             cfg = Config.fromfile(config)
 
             if "class_list" not in input.data["metadata"]:
-                raise Exception("Dataset metadata should contain a key class_list. ")
+                raise Exception(
+                    "Dataset metadata should contain a key class_list. ")
 
             if "dict_file" not in input.data["metadata"]:
-                raise Exception("Dataset metadata should contain a key dict_file")
+                raise Exception(
+                    "Dataset metadata should contain a key dict_file")
 
             with open(input.data["metadata"]["dict_file"], 'r') as f:
                 num_classes = len(f.read().rstrip().splitlines())
@@ -248,7 +254,8 @@ class TrainMmlabKie(dnntrain.TrainProcess):
             cfg.default_hooks.checkpoint["save_best"] = 'kie/micro_f1'
             cfg.default_hooks.checkpoint["rule"] = 'greater'
 
-        cfg.visualizer.vis_backends = [dict(type='TensorboardVisBackend', save_dir=tb_logdir)]
+        cfg.visualizer.vis_backends = [
+            dict(type='TensorboardVisBackend', save_dir=tb_logdir)]
 
         try:
             visualizer = Visualizer.get_current_instance()
@@ -293,12 +300,14 @@ class TrainMmlabKie(dnntrain.TrainProcess):
 
     @staticmethod
     def get_model_zoo():
-        configs_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs", "kie")
+        configs_folder = os.path.join(os.path.dirname(
+            os.path.abspath(__file__)), "configs", "kie")
         available_pairs = []
         for model_name in os.listdir(configs_folder):
             if model_name.startswith('_'):
                 continue
-            yaml_file = os.path.join(configs_folder, model_name, "metafile.yml")
+            yaml_file = os.path.join(
+                configs_folder, model_name, "metafile.yml")
             if os.path.isfile(yaml_file):
                 with open(yaml_file, "r") as f:
                     models_list = yaml.load(f, Loader=yaml.FullLoader)
@@ -307,7 +316,8 @@ class TrainMmlabKie(dnntrain.TrainProcess):
                     if not isinstance(models_list, list):
                         continue
                 for model_dict in models_list:
-                    available_pairs.append({"model_name": model_name, "cfg": os.path.basename(model_dict["Name"])})
+                    available_pairs.append(
+                        {"model_name": model_name, "cfg": os.path.basename(model_dict["Name"])})
         return available_pairs
 
     @staticmethod
@@ -328,8 +338,10 @@ class TrainMmlabKie(dnntrain.TrainProcess):
                                   for model_dict in models_list}
             if model_config in available_cfg_ckpt:
                 cfg_file = available_cfg_ckpt[model_config]['cfg']
-                ckpt_file = available_cfg_ckpt[model_config]['ckpt'] if param.cfg["model_weight_file"] == "" else param.cfg["model_weight_file"]
-                cfg_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), cfg_file)
+                ckpt_file = available_cfg_ckpt[model_config]['ckpt'] if param.cfg[
+                    "model_weight_file"] == "" else param.cfg["model_weight_file"]
+                cfg_file = os.path.join(os.path.dirname(
+                    os.path.abspath(__file__)), cfg_file)
             else:
                 raise Exception(
                     f"{model_config} does not exist for {model_name}. Available configs for are {', '.join(list(available_cfg_ckpt.keys()))}")
@@ -358,9 +370,8 @@ class TrainMmlabKieFactory(dataprocess.CTaskFactory):
         self.info.short_description = "Train for MMOCR from MMLAB KIE models"
         # relative path -> as displayed in Ikomia application process tree
         self.info.path = "Plugins/Python/Text"
-        self.info.version = "2.2.0"
-        self.info.max_python_version = "3.10"
-        self.info.max_python_version = "3.11"
+        self.info.version = "3.0.0"
+        self.info.min_python_version = "3.10.0"
         self.info.min_ikomia_version = "0.16.0"
         self.info.icon_path = "icons/mmlab.png"
         self.info.authors = "Kuang, Zhanghui and Sun, Hongbin and Li, Zhizhong and Yue, Xiaoyu and Lin," \
@@ -373,8 +384,7 @@ class TrainMmlabKieFactory(dataprocess.CTaskFactory):
         # URL of documentation
         self.info.documentation_link = "https://mmocr.readthedocs.io/en/latest/"
         # Code source repository
-        self.info.original_repository = "https://github.com/open-mmlab/mmocr"
-
+        self.info.original_repository = "https://github.com/Ikomia-dev/mmocr"
         self.info.repository = "https://github.com/Ikomia-hub/train_mmlab_kie"
         # Keywords used for search
         self.info.keywords = "train, key, information, extraction, kie, mmlab, sdmgr"
